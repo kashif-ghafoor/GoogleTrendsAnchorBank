@@ -15,12 +15,13 @@ import numpy as np
 import pandas as pd
 from pytrends.request import TrendReq
 from tqdm import tqdm
+import requests
 
 
 class GTAB:
 
     def __delete_all_internal_files(self):
-        """  Deletes all saved caches (keywords, results and pairs). Be careful! """
+        """Deletes all saved caches (keywords, results and pairs). Be careful!"""
         dirs = ("google_keywords", "google_pairs", "google_results")
 
         files = list()
@@ -30,7 +31,9 @@ class GTAB:
 
         nl = '\n'
         tb = '\t'
-        print(f"This will delete the following files:\n\t{(nl + tb).join([os.path.basename(f) for f in files])}")
+        print(
+            f"This will delete the following files:\n\t{(nl + tb).join([os.path.basename(f) for f in files])}"
+        )
         c = input("Are you sure? (y/n): ")
         if c[0].lower() == 'y':
             print("Deleting...")
@@ -40,13 +43,14 @@ class GTAB:
         else:
             print("Delete cancelled.")
 
-    def __init__(self, dir_path=None, from_cli=False):
+    def __init__(self, dir_path=None, from_cli=False, custom_grends_fetch=False):
         """
         Initializes a GTAB instance with the desired directory.
 
         :param dir_path:  path where to create a directory. If left to None, uses default package directory;
         :param from_cli: Is from command line interface?
         :param high_traffic: If true, adds high traffic keywords.
+        :param custom_grends_fetch: if true, fetches data from custom google trends api.
         """
 
         self.from_cli = from_cli
@@ -60,34 +64,67 @@ class GTAB:
                 # creating directory structure
                 os.makedirs(os.path.join(self.dir_path, "logs"))
                 os.makedirs(os.path.join(self.dir_path, "config"))
-                os.makedirs(os.path.join(self.dir_path, "data", "internal", "google_keywords"))
-                os.makedirs(os.path.join(self.dir_path, "data", "internal", "google_pairs"))
-                os.makedirs(os.path.join(self.dir_path, "data", "internal", "google_results"))
+                os.makedirs(
+                    os.path.join(self.dir_path, "data", "internal", "google_keywords")
+                )
+                os.makedirs(
+                    os.path.join(self.dir_path, "data", "internal", "google_pairs")
+                )
+                os.makedirs(
+                    os.path.join(self.dir_path, "data", "internal", "google_results")
+                )
                 os.makedirs(os.path.join(self.dir_path, "output", "google_anchorbanks"))
 
                 # copying defaults
-                shutil.copyfile(os.path.join(default_path, "data", "anchor_candidate_list.txt"),
-                                os.path.join(self.dir_path, "data", "anchor_candidate_list.txt"))
-                shutil.copyfile(os.path.join(default_path, "config", "config_py.json"),
-                                os.path.join(self.dir_path, "config", "config_py.json"))
-                shutil.copyfile(os.path.join(default_path, "config", "config_cl.json"),
-                                os.path.join(self.dir_path, "config", "config_cl.json"))
-                for f in glob.glob(os.path.join(default_path, "output", "google_anchorbanks", "*.tsv")):
-                    shutil.copyfile(f, os.path.join(self.dir_path, "output", "google_anchorbanks", os.path.basename(f)))
+                shutil.copyfile(
+                    os.path.join(default_path, "data", "anchor_candidate_list.txt"),
+                    os.path.join(self.dir_path, "data", "anchor_candidate_list.txt"),
+                )
+                shutil.copyfile(
+                    os.path.join(default_path, "config", "config_py.json"),
+                    os.path.join(self.dir_path, "config", "config_py.json"),
+                )
+                shutil.copyfile(
+                    os.path.join(default_path, "config", "config_cl.json"),
+                    os.path.join(self.dir_path, "config", "config_cl.json"),
+                )
+                for f in glob.glob(
+                    os.path.join(default_path, "output", "google_anchorbanks", "*.tsv")
+                ):
+                    shutil.copyfile(
+                        f,
+                        os.path.join(
+                            self.dir_path,
+                            "output",
+                            "google_anchorbanks",
+                            os.path.basename(f),
+                        ),
+                    )
             else:
                 print("Directory already exists, loading data from it.")
 
         print(f"Using directory '{self.dir_path}'")
         if from_cli:
-            with open(os.path.join(self.dir_path, "config", "config_cl.json"), 'r') as fp:
+            with open(
+                os.path.join(self.dir_path, "config", "config_cl.json"), 'r'
+            ) as fp:
                 self.CONFIG = json.load(fp)
         else:
-            with open(os.path.join(self.dir_path, "config", "config_py.json"), 'r') as fp:
+            with open(
+                os.path.join(self.dir_path, "config", "config_py.json"), 'r'
+            ) as fp:
                 self.CONFIG = json.load(fp)
 
         self.CONFIG['CONN']['timeout'] = tuple(self.CONFIG['CONN']['timeout'])
-        self.ANCHOR_CANDIDATES = [el.strip() for el in open(
-            os.path.join(self.dir_path, "data", self.CONFIG['GTAB']['anchor_candidates_file']), "r")]
+        self.ANCHOR_CANDIDATES = [
+            el.strip()
+            for el in open(
+                os.path.join(
+                    self.dir_path, "data", self.CONFIG['GTAB']['anchor_candidates_file']
+                ),
+                "r",
+            )
+        ]
 
         if self.CONFIG['GTAB']['num_anchor_candidates'] >= len(self.ANCHOR_CANDIDATES):
             self.CONFIG['GTAB']['num_anchor_candidates'] = len(self.ANCHOR_CANDIDATES)
@@ -99,8 +136,12 @@ class GTAB:
 
         # sets default anchorbank
         if not self.from_cli:
-            default_anchorbank = "google_anchorbank_geo=_timeframe=2019-01-01 2020-08-01.tsv"
+            default_anchorbank = (
+                "google_anchorbank_geo=_timeframe=2019-01-01 2020-08-01.tsv"
+            )
             self.set_active_gtab(default_anchorbank)
+
+        self.custom_grends_fetch = custom_grends_fetch
 
     # --- UTILITY METHODS ---
 
@@ -111,10 +152,14 @@ class GTAB:
 
     def _make_file_suffix(self):
 
-        return "_".join([f"{k}={v}" for k, v in self.CONFIG['PYTRENDS'].items()
-                         if not (k == "cat" and v == "0")]  # this if ensures compatibility with previous name formats,
-                        # after we allow people to search for categories
-                        )
+        return "_".join(
+            [
+                f"{k}={v}"
+                for k, v in self.CONFIG['PYTRENDS'].items()
+                if not (k == "cat" and v == "0")
+            ]  # this if ensures compatibility with previous name formats,
+            # after we allow people to search for categories
+        )
 
     def _query_google(self, keywords=["Keywords"]):
         time.sleep(self.CONFIG['GTAB']['sleep'])
@@ -124,15 +169,109 @@ class GTAB:
         if len(keywords) > 5:
             raise ValueError("Number of keywords must be at most than 5.")
 
+        # build dataframe similar to how pytrends does it
+
         # avoids duplicate query
         if len(keywords) == 2 and keywords[0] == keywords[1]:
-            self.pytrends.build_payload(kw_list=[keywords[0]], **self.CONFIG['PYTRENDS'])
-            ret = self.pytrends.interest_over_time()
-            ret.insert(loc=1, column="tmp", value=ret.iloc[:, 0])
+            if self.custom_grends_fetch == True:
+                timeLineData = self._get_google_trends_data([keywords[0]])
+                ret = self._get_py_trends_like_df(timeLineData, [keywords[0]])
+                ret.insert(loc=1, column="tmp", value=ret.iloc[:, 0])
+            else:
+                self.pytrends.build_payload(
+                    kw_list=[keywords[0]], **self.CONFIG['PYTRENDS']
+                )
+                ret = self.pytrends.interest_over_time()
+                ret.insert(loc=1, column="tmp", value=ret.iloc[:, 0])
         else:
-            self.pytrends.build_payload(kw_list=keywords, **self.CONFIG['PYTRENDS'])
-            ret = self.pytrends.interest_over_time()
+            if self.custom_grends_fetch == True:
+                timeLineData = self._get_google_trends_data(keywords)
+                print("type of timelineData", type(timeLineData))
+                ret = self._get_py_trends_like_df(timeLineData, keywords)
+            else:
+                self.pytrends.build_payload(kw_list=keywords, **self.CONFIG['PYTRENDS'])
+                ret = self.pytrends.interest_over_time()
         return ret
+
+    """_summary_
+    get google trends data from custom google trends api
+    """
+
+    def _get_google_trends_data(self, keywords):
+        self._print_and_log(f"Getting data from custom endpoint for {keywords}")
+        conf = self.CONFIG['PYTRENDS']
+        timeframe = conf['timeframe']
+        url = os.getenv("GOOGLE_TRENDS_API_URL")
+        if not url:
+            raise Exception("GOOGLE_TRENDS_API_URL environment variable not set")
+        # define zones for retries
+        proxyZone = ["data_center", "data_center", "mobile", "mobile", "isp"]
+        for i in range(5):  # 5 retries
+            try:
+                if i > 0:
+                    # sleep for 5 seconds before retrying
+                    time.sleep(5)
+                response = requests.request(
+                    method="POST",
+                    url=url,
+                    json={
+                        "keyword": keywords,
+                        "startTime": timeframe.split(" ")[0],
+                        "endTime": timeframe.split(" ")[1],
+                        "geo": conf['geo'],
+                        "category": conf['cat'],
+                        "proxyOptions": {
+                            "zone": proxyZone[i],
+                        },
+                    },
+                )
+                response.raise_for_status()  # raise exception if status is not 200
+                return response.json()
+            except requests.exceptions.HTTPError as err:
+                self._print_and_log(f"Try {i+1} failed")
+                continue
+        raise Exception("Failed to get data from google trends api after 5 retries")
+
+    """
+    Builds data frame similar to pytrends on google trends timelineData
+    https://github.com/GeneralMills/pytrends/blob/a9984ffdc9b31d853dde2ab614a77ecbf2bf33a1/pytrends/request.py#L243-L283
+    """
+
+    def _get_py_trends_like_df(self, timeLineData, keywords):
+        self._print_and_log(f"Building data frame for {keywords}")
+        df = pd.DataFrame(timeLineData)
+        if df.empty:
+            return df
+
+        df['date'] = pd.to_datetime(df['time'].astype(dtype='float64'), unit='s')
+        df = df.set_index(['date']).sort_index()
+        result_df = df['value'].apply(
+            lambda x: pd.Series(str(x).replace('[', '').replace(']', '').split(','))
+        )
+
+        for idx, kw in enumerate(keywords):
+            # there is currently a bug with assigning columns that may be
+            # parsed as a date in pandas: use explicit insert column method
+            result_df.insert(len(result_df.columns), kw, result_df[idx].astype('int'))
+            del result_df[idx]
+
+        if 'isPartial' in df:
+            # make other dataframe from isPartial key data
+            # split list columns into seperate ones, remove brackets and split on comma
+            df = df.fillna(False)
+            result_df2 = df['isPartial'].apply(
+                lambda x: pd.Series(str(x).replace('[', '').replace(']', '').split(','))
+            )
+            result_df2.columns = ['isPartial']
+            # Change to a bool type.
+            result_df2.isPartial = result_df2.isPartial == 'True'
+            # concatenate the two dataframes
+            final = pd.concat([result_df, result_df2], axis=1)
+        else:
+            final = result_df
+            final['isPartial'] = False
+
+        return final
 
     def _is_not_blacklisted(self, keyword):
         return keyword not in self.CONFIG['BLACKLIST']
@@ -148,10 +287,14 @@ class GTAB:
             if "response" in dir(e) and e.response is not None:
                 if e.response.status_code == 429:
                     if retry_on_429:
-                        input("Quota reached! Please change IP and press enter to continue.")
+                        input(
+                            "Quota reached! Please change IP and press enter to continue."
+                        )
                         return self._check_keyword(keyword)
                     else:
-                        raise ConnectionError("Code 429: Query limit reached on this IP!")
+                        raise ConnectionError(
+                            "Code 429: Query limit reached on this IP!"
+                        )
                 self._print_and_log(f"\nBad keyword '{keyword}', because {e}")
             else:
                 raise e
@@ -189,7 +332,9 @@ class GTAB:
 
         ret = []
         for val in gres.values():
-            if sum(val.max() < self.CONFIG['GTAB']['thresh_offline']) == 4:  # try with 3 as well, less restrictive
+            if (
+                sum(val.max() < self.CONFIG['GTAB']['thresh_offline']) == 4
+            ):  # try with 3 as well, less restrictive
                 ret.append(val.max().idxmax())
 
         return ret
@@ -217,7 +362,11 @@ class GTAB:
 
         # old heuristic
         bad_kws2 = self._check_groups(gres)
-        bad_idxs2 = [bad_dict[kw][0] for kw in bad_kws2 if kw in bad_dict and bad_dict[kw][0] < len(gres) - 4]
+        bad_idxs2 = [
+            bad_dict[kw][0]
+            for kw in bad_kws2
+            if kw in bad_dict and bad_dict[kw][0] < len(gres) - 4
+        ]
 
         ret = sorted(bad_idxs1 + bad_idxs2)
 
@@ -229,12 +378,27 @@ class GTAB:
     #  --- ANCHOR BANK METHODS ---
     def _get_google_results(self):
 
-        fpath = os.path.join(self.dir_path, "data", "internal", "google_results",
-                             f"google_results_{self._make_file_suffix()}.pkl")
-        fpath_intermediate = os.path.join(self.dir_path, "data", "internal", "google_results",
-                                          f"intermediate_google_results_{self._make_file_suffix()}.pkl")
-        fpath_keywords = os.path.join(self.dir_path, "data", "internal", "google_keywords",
-                                      f"google_keywords_{self._make_file_suffix()}.pkl")
+        fpath = os.path.join(
+            self.dir_path,
+            "data",
+            "internal",
+            "google_results",
+            f"google_results_{self._make_file_suffix()}.pkl",
+        )
+        fpath_intermediate = os.path.join(
+            self.dir_path,
+            "data",
+            "internal",
+            "google_results",
+            f"intermediate_google_results_{self._make_file_suffix()}.pkl",
+        )
+        fpath_keywords = os.path.join(
+            self.dir_path,
+            "data",
+            "internal",
+            "google_keywords",
+            f"google_keywords_{self._make_file_suffix()}.pkl",
+        )
 
         if os.path.exists(fpath):
             self._print_and_log(f"Loading google results from {fpath}...")
@@ -293,15 +457,23 @@ class GTAB:
             N = self.CONFIG['GTAB']['num_anchor_candidates']
             K = self.CONFIG['GTAB']['num_anchors']
 
-            fpath_intermediate_keywords = os.path.join(self.dir_path, "data", "internal", "google_keywords",
-                                                       f"intermediate_google_keywords_{self._make_file_suffix()}.pkl")
+            fpath_intermediate_keywords = os.path.join(
+                self.dir_path,
+                "data",
+                "internal",
+                "google_keywords",
+                f"intermediate_google_keywords_{self._make_file_suffix()}.pkl",
+            )
 
             # --- Get stratified samples, 1 per stratum. ---
             if not os.path.exists(fpath_keywords):
                 if os.path.exists(fpath_intermediate_keywords):
-                    self._print_and_log(f"Loading previously checked keywords from {fpath_intermediate_keywords}.")
-                    keywords_with_status = self._load_pickle_with_fallback(fpath_intermediate_keywords,
-                                                                           on_error_return={})
+                    self._print_and_log(
+                        f"Loading previously checked keywords from {fpath_intermediate_keywords}."
+                    )
+                    keywords_with_status = self._load_pickle_with_fallback(
+                        fpath_intermediate_keywords, on_error_return={}
+                    )
                 else:
                     keywords_with_status = {}
 
@@ -316,13 +488,19 @@ class GTAB:
                     samples.append(self.ANCHOR_CANDIDATES[s1])
 
                 keyword_candidates = self.HITRAFFIC + samples
-                remaining_keywords = [kw for kw in keyword_candidates if kw not in keywords_with_status]
-                self._print_and_log(f"{len(keyword_candidates) - len(remaining_keywords)}/{len(keyword_candidates)} "
-                                    f"keyword candidates found in cache, {len(remaining_keywords)} still to check.")
+                remaining_keywords = [
+                    kw for kw in keyword_candidates if kw not in keywords_with_status
+                ]
+                self._print_and_log(
+                    f"{len(keyword_candidates) - len(remaining_keywords)}/{len(keyword_candidates)} "
+                    f"keyword candidates found in cache, {len(remaining_keywords)} still to check."
+                )
                 self._print_and_log("Sampling keywords...")
                 for kw in tqdm(remaining_keywords, total=len(remaining_keywords)):
                     try:
-                        keywords_with_status[kw] = self._check_keyword(kw, retry_on_429=True)
+                        keywords_with_status[kw] = self._check_keyword(
+                            kw, retry_on_429=True
+                        )
                     except Exception as e:
                         with open(fpath_intermediate_keywords, 'wb') as f_in:
                             pickle.dump(keywords_with_status, f_in, protocol=4)
@@ -333,7 +511,11 @@ class GTAB:
                 print(f"Getting keywords from {fpath_keywords}")
                 with open(fpath_keywords, 'rb') as f_kw_in:
                     keywords = pickle.load(f_kw_in)
-                keywords = [k for k in tqdm(keywords, total=len(keywords)) if self._is_not_blacklisted(k)]
+                keywords = [
+                    k
+                    for k in tqdm(keywords, total=len(keywords))
+                    if self._is_not_blacklisted(k)
+                ]
 
             with open(fpath_keywords, 'wb') as f_out_keywords:
                 pickle.dump(keywords, f_out_keywords, protocol=4)
@@ -347,13 +529,17 @@ class GTAB:
             self._print_and_log("Querying google...")
 
             if os.path.exists(fpath_intermediate):
-                self._print_and_log(f"Loading intermediate query results from {fpath_intermediate}.")
-                query_cache = self._load_pickle_with_fallback(fpath_intermediate, on_error_return={})
+                self._print_and_log(
+                    f"Loading intermediate query results from {fpath_intermediate}."
+                )
+                query_cache = self._load_pickle_with_fallback(
+                    fpath_intermediate, on_error_return={}
+                )
             else:
                 query_cache = {}
             t_ret = {}
             for i in tqdm(range(len(keywords) - 4)):
-                kw_group = keywords[i:i + 5]
+                kw_group = keywords[i : i + 5]
                 cache_key = tuple(kw_group)
                 if cache_key in query_cache:
                     t_ret[i] = query_cache[cache_key]
@@ -368,9 +554,17 @@ class GTAB:
                     except Exception as e:
                         with open(fpath_intermediate, 'wb') as f_out:
                             pickle.dump(query_cache, f_out, protocol=4)
-                        if "response" in dir(e) and e.response is not None and e.response.status_code == 429:
-                            input("Quota reached! Please change IP and press enter to continue.")
-                            df_query = self._query_google(keywords=kw_group).iloc[:, 0:5]
+                        if (
+                            "response" in dir(e)
+                            and e.response is not None
+                            and e.response.status_code == 429
+                        ):
+                            input(
+                                "Quota reached! Please change IP and press enter to continue."
+                            )
+                            df_query = self._query_google(keywords=kw_group).iloc[
+                                :, 0:5
+                            ]
                             query_cache[cache_key] = df_query
                         else:
                             raise e
@@ -403,7 +597,9 @@ class GTAB:
                 keywords = [el[0] for el in new_kws if el[1]]
 
                 # compute where we should re-query
-                requery_ranges, requery_counts = compute_requery_ranges(bad_idxs=bad_idxs)
+                requery_ranges, requery_counts = compute_requery_ranges(
+                    bad_idxs=bad_idxs
+                )
 
                 idx_new = 0
                 start_copy = 0
@@ -423,7 +619,9 @@ class GTAB:
                             ret[idx_new] = query_cache[cache_key]
                         else:
                             try:
-                                df_query = self._query_google(keywords=kw_group).iloc[:, 0:5]
+                                df_query = self._query_google(keywords=kw_group).iloc[
+                                    :, 0:5
+                                ]
                             except ValueError as e:
                                 with open(fpath_intermediate, 'wb') as f_out:
                                     pickle.dump(query_cache, f_out, protocol=4)
@@ -431,9 +629,17 @@ class GTAB:
                             except Exception as e:
                                 with open(fpath_intermediate, 'wb') as f_out:
                                     pickle.dump(query_cache, f_out, protocol=4)
-                                if "response" in dir(e) and e.response is not None and e.response.status_code == 429:
-                                    input("Quota reached! Please change IP and press enter to continue.")
-                                    df_query = self._query_google(keywords=kw_group).iloc[:, 0:5]
+                                if (
+                                    "response" in dir(e)
+                                    and e.response is not None
+                                    and e.response.status_code == 429
+                                ):
+                                    input(
+                                        "Quota reached! Please change IP and press enter to continue."
+                                    )
+                                    df_query = self._query_google(
+                                        keywords=kw_group
+                                    ).iloc[:, 0:5]
                                 else:
                                     raise e
                             query_cache[cache_key] = df_query
@@ -469,7 +675,9 @@ class GTAB:
             with open(fpath, 'rb') as f_in:
                 return pickle.load(f_in)
         except Exception as e:
-            self._print_and_log(f"Load pickle from path {fpath} failed with cause: {e}, resorting to fallback.")
+            self._print_and_log(
+                f"Load pickle from path {fpath} failed with cause: {e}, resorting to fallback."
+            )
             return on_error_return
 
     def _compute_hi_and_lo(self, max1, max2):
@@ -513,7 +721,9 @@ class GTAB:
                     if j == k:
                         continue
 
-                    if self._check_ts(val.iloc[:, j]) and self._check_ts(val.iloc[:, k]):
+                    if self._check_ts(val.iloc[:, j]) and self._check_ts(
+                        val.iloc[:, k]
+                    ):
                         anchors.append(val.columns[0])  # first element of the group
                         v1.append(val.columns[j])
                         v2.append(val.columns[k])
@@ -527,11 +737,24 @@ class GTAB:
                         log_errors.append(np.log(hi2 / lo2 * hi1 / lo1))
 
         ret = pd.DataFrame(
-            data={'v1': v1, 'v2': v2, 'anchor': anchors, 'ratio': ratios, 'ratio_hi': ratios_hi, 'ratio_lo': ratios_lo,
-                  'error': errors, 'weight': log_errors})
+            data={
+                'v1': v1,
+                'v2': v2,
+                'anchor': anchors,
+                'ratio': ratios,
+                'ratio_hi': ratios_hi,
+                'ratio_lo': ratios_lo,
+                'error': errors,
+                'weight': log_errors,
+            }
+        )
 
         # Removing excess edges for MultiGraph -> Graph conversion.
-        ret = ret.sort_values('weight', ascending=True).drop_duplicates(["v1", "v2"]).sort_index()
+        ret = (
+            ret.sort_values('weight', ascending=True)
+            .drop_duplicates(["v1", "v2"])
+            .sort_index()
+        )
 
         return ret
 
@@ -546,22 +769,30 @@ class GTAB:
 
             return ret
 
-        G = nx.convert_matrix.from_pandas_edgelist(ratios, 'v1', 'v2',
-                                                   edge_attr=['weight', "ratio", "ratio_hi", "ratio_lo", 'error'],
-                                                   create_using=nx.DiGraph)
+        G = nx.convert_matrix.from_pandas_edgelist(
+            ratios,
+            'v1',
+            'v2',
+            edge_attr=['weight', "ratio", "ratio_hi", "ratio_lo", 'error'],
+            create_using=nx.DiGraph,
+        )
 
         assert len(G.edges()) % 2 == 0
 
         # strongly?
-        if not nx.is_strongly_connected(G) or not nx.is_weakly_connected(G) or nx.number_connected_components(
-                nx.Graph(G)) > 1:
+        if (
+            not nx.is_strongly_connected(G)
+            or not nx.is_weakly_connected(G)
+            or nx.number_connected_components(nx.Graph(G)) > 1
+        ):
             for comp in nx.connected_components(nx.Graph(G)):
                 self._print_and_log(f"Component with length {len(comp)}: {str(comp)}")
                 self._error_flag = True
 
             self._print_and_log(
                 f"Num. connected components: {nx.number_strongly_connected_components(G)}. "
-                f"Directed graph is not strongly connected!")
+                f"Directed graph is not strongly connected!"
+            )
             warnings.warn("Directed graph is not connected!")
 
             # ratios.to_csv("ratios_test.tsv", sep = '\t')
@@ -576,7 +807,9 @@ class GTAB:
         self._print_and_log("Finding paths...")
         for p_obj in tqdm(paths):
             for p in p_obj[1].values():
-                path_attrib_dict = compute_path_attribs(p, G, ['weight', "ratio", "ratio_hi", "ratio_lo", 'error'])
+                path_attrib_dict = compute_path_attribs(
+                    p, G, ['weight', "ratio", "ratio_hi", "ratio_lo", 'error']
+                )
                 v1 = p[0]
                 v2 = p[-1]
                 W.loc[v1][v2] = path_attrib_dict['ratio']
@@ -611,8 +844,13 @@ class GTAB:
     def _build_optimal_anchor_bank(self, mids):
 
         N = len(mids)
-        fpath = os.path.join(self.dir_path, "data", "internal", "google_pairs",
-                             f"google_pairs_{self._make_file_suffix()}.pkl")
+        fpath = os.path.join(
+            self.dir_path,
+            "data",
+            "internal",
+            "google_pairs",
+            f"google_pairs_{self._make_file_suffix()}.pkl",
+        )
 
         if os.path.exists(fpath):
             with open(fpath, 'rb') as f_in:
@@ -625,34 +863,64 @@ class GTAB:
             with open(fpath, 'wb') as f_out:
                 pickle.dump(pairwise_dict, f_out)
 
-        pairs_max_ratios = [1.0] + [np.max(ts.iloc[:, 1] / 100) for ts in pairwise_dict.values()]
-        pairs_max_ratios_hi = [1.0] + [np.max((ts.iloc[:, 1] + 0.5) / 100) for ts in pairwise_dict.values()]
-        pairs_max_ratios_lo = [1.0] + [np.max((ts.iloc[:, 1] - 0.5) / 100) for ts in pairwise_dict.values()]
+        pairs_max_ratios = [1.0] + [
+            np.max(ts.iloc[:, 1] / 100) for ts in pairwise_dict.values()
+        ]
+        pairs_max_ratios_hi = [1.0] + [
+            np.max((ts.iloc[:, 1] + 0.5) / 100) for ts in pairwise_dict.values()
+        ]
+        pairs_max_ratios_lo = [1.0] + [
+            np.max((ts.iloc[:, 1] - 0.5) / 100) for ts in pairwise_dict.values()
+        ]
 
         W = pd.DataFrame(0, index=mids, columns=mids)
         W_hi = pd.DataFrame(0, index=mids, columns=mids)
         W_lo = pd.DataFrame(0, index=mids, columns=mids)
 
         for i in range(0, N):
-            W.iloc[i] = np.cumprod(pairs_max_ratios) / np.prod(pairs_max_ratios[0:(i + 1)])
-            W_hi.iloc[i] = np.cumprod(pairs_max_ratios_hi) / np.prod(pairs_max_ratios_hi[0:(i + 1)])
-            W_lo.iloc[i] = np.cumprod(pairs_max_ratios_lo) / np.prod(pairs_max_ratios_lo[0:(i + 1)])
+            W.iloc[i] = np.cumprod(pairs_max_ratios) / np.prod(
+                pairs_max_ratios[0 : (i + 1)]
+            )
+            W_hi.iloc[i] = np.cumprod(pairs_max_ratios_hi) / np.prod(
+                pairs_max_ratios_hi[0 : (i + 1)]
+            )
+            W_lo.iloc[i] = np.cumprod(pairs_max_ratios_lo) / np.prod(
+                pairs_max_ratios_lo[0 : (i + 1)]
+            )
 
-        W_hi = pd.DataFrame(np.triu(W_hi) + np.tril(1 / W_lo.transpose(), k=-1), index=mids, columns=mids)
-        W_lo = pd.DataFrame(np.triu(W_lo) + np.tril(1 / W_hi.transpose(), k=-1), index=mids, columns=mids)
+        W_hi = pd.DataFrame(
+            np.triu(W_hi) + np.tril(1 / W_lo.transpose(), k=-1),
+            index=mids,
+            columns=mids,
+        )
+        W_lo = pd.DataFrame(
+            np.triu(W_lo) + np.tril(1 / W_hi.transpose(), k=-1),
+            index=mids,
+            columns=mids,
+        )
 
         return W, W_lo, W_hi
 
     # --- "EXPOSED" METHODS ---
     def print_options(self):
-        """ Prints the current config options in the active directory. """
+        """Prints the current config options in the active directory."""
         if self.from_cli:
-            print(f"Config file: {os.path.join(self.dir_path, 'config', 'config_cl.json')}")
+            print(
+                f"Config file: {os.path.join(self.dir_path, 'config', 'config_cl.json')}"
+            )
         else:
-            print(f"Config file: {os.path.join(self.dir_path, 'config', 'config_py.json')}")
+            print(
+                f"Config file: {os.path.join(self.dir_path, 'config', 'config_py.json')}"
+            )
         print(self.CONFIG)
 
-    def set_options(self, pytrends_config=None, gtab_config=None, conn_config=None, overwite_file: bool = False):
+    def set_options(
+        self,
+        pytrends_config=None,
+        gtab_config=None,
+        conn_config=None,
+        overwite_file: bool = False,
+    ):
         """
         Overwrites specified options. This can also be done manually by editing 'config_py.json' in the active
         directory.
@@ -682,11 +950,13 @@ class GTAB:
                     - timeout (list of two values) - e.g. [25, 25]
 
             overwrite_file - whether to overwrite the config_py.json file in the active directory.
-            """
+        """
 
         if pytrends_config is not None:
             if type(pytrends_config) != dict:
-                raise TypeError("The pytrends_config argument must be a dictionary with valid parameters!")
+                raise TypeError(
+                    "The pytrends_config argument must be a dictionary with valid parameters!"
+                )
             for k in pytrends_config:
                 if k not in self.CONFIG['PYTRENDS']:
                     raise ValueError(f"Invalid parameter: {k}")
@@ -694,7 +964,9 @@ class GTAB:
 
         if gtab_config is not None:
             if type(gtab_config) != dict:
-                raise TypeError("The gtab_config argument must be a dictionary with valid parameters!")
+                raise TypeError(
+                    "The gtab_config argument must be a dictionary with valid parameters!"
+                )
             for k in gtab_config:
                 if k not in self.CONFIG['GTAB']:
                     raise ValueError(f"Invalid parameter: {k}")
@@ -702,7 +974,9 @@ class GTAB:
 
         if conn_config is not None:
             if type(conn_config) != dict:
-                raise TypeError("The conn_config argument must be a dictionary with valid parameters!")
+                raise TypeError(
+                    "The conn_config argument must be a dictionary with valid parameters!"
+                )
             for k in conn_config:
                 if k not in self.CONFIG['CONN']:
                     raise ValueError(f"Invalid parameter: {k}")
@@ -730,7 +1004,9 @@ class GTAB:
             overwrite_file - whether to overwrite the config_py.json file in the active directory.
         """
         if type(keywords) != list:
-            raise TypeError("Keywords paremeter must be a list with elements of type str.")
+            raise TypeError(
+                "Keywords paremeter must be a list with elements of type str."
+            )
         keywords = [str(kw) for kw in keywords]
         self.CONFIG["BLACKLIST"] = keywords
 
@@ -752,7 +1028,9 @@ class GTAB:
             overwrite_file - whether to overwrite the config_py.json file in the active directory.
         """
         if type(keywords) != list:
-            raise TypeError("Keywords paremeter must be a list with elements of type str.")
+            raise TypeError(
+                "Keywords paremeter must be a list with elements of type str."
+            )
         keywords = [str(kw) for kw in keywords]
         self.CONFIG["HITRAFFIC"] = keywords
 
@@ -767,28 +1045,35 @@ class GTAB:
 
     def list_gtabs(self):
         """
-            Lists filenames of constructed gtabs.
+        Lists filenames of constructed gtabs.
         """
         print("Existing GTABs:")
-        for f in glob.glob(os.path.join(self.dir_path, "output", 'google_anchorbanks', '*')):
+        for f in glob.glob(
+            os.path.join(self.dir_path, "output", 'google_anchorbanks', '*')
+        ):
             print(f"\t{os.path.basename(f)}")
 
         print(
-            f"Active anchorbank: {'None selected.' if self.active_gtab == None else os.path.basename(self.active_gtab)}")
+            f"Active anchorbank: {'None selected.' if self.active_gtab == None else os.path.basename(self.active_gtab)}"
+        )
 
     def rename_gtab(self, src, dst):
         """
-            Renames a gtab.
-            
-            Input parameters:
-                src - filename of source;
-                dst - filename of destination.
+        Renames a gtab.
+
+        Input parameters:
+            src - filename of source;
+            dst - filename of destination.
 
         """
-        src_path = os.path.join(os.path.join(self.dir_path, "output", "google_anchorbanks", src))
+        src_path = os.path.join(
+            os.path.join(self.dir_path, "output", "google_anchorbanks", src)
+        )
         if not os.path.exists(src_path):
             raise FileNotFoundError(src_path)
-        os.rename(src_path, os.path.join(self.dir_path, "output", "google_anchorbanks", dst))
+        os.rename(
+            src_path, os.path.join(self.dir_path, "output", "google_anchorbanks", dst)
+        )
         print(f"Renamed '{src}' -> '{dst}'\n")
         if self.active_gtab is not None:
             if src.strip() == os.path.basename(self.active_gtab).strip():
@@ -796,14 +1081,16 @@ class GTAB:
 
     def delete_gtab(self, src, require_confirmation=True):
         """
-            Deletes a gtab.
+        Deletes a gtab.
 
-            Input parameters:
-                src - filename of source;
-                require_confirmation - whether to prompt user for confirmation.
+        Input parameters:
+            src - filename of source;
+            require_confirmation - whether to prompt user for confirmation.
 
         """
-        src_path = os.path.join(os.path.join(self.dir_path, "output", "google_anchorbanks", src))
+        src_path = os.path.join(
+            os.path.join(self.dir_path, "output", "google_anchorbanks", src)
+        )
         if not os.path.exists(src_path):
             raise FileNotFoundError(src_path)
 
@@ -820,53 +1107,68 @@ class GTAB:
 
     def set_active_gtab(self, def_gtab):
         """
-            Sets the active gtab for querying in the online phase.
+        Sets the active gtab for querying in the online phase.
 
-            Input parameters:
-                def_gtab - filename of the desired gtab. N.B. must exist in 'output/google_anchorbanks'
+        Input parameters:
+            def_gtab - filename of the desired gtab. N.B. must exist in 'output/google_anchorbanks'
         """
-        def_gtab_fpath = os.path.join(self.dir_path, "output", 'google_anchorbanks', def_gtab)
+        def_gtab_fpath = os.path.join(
+            self.dir_path, "output", 'google_anchorbanks', def_gtab
+        )
         if not os.path.exists(def_gtab_fpath):
             raise FileNotFoundError(def_gtab_fpath)
 
         self.active_gtab = def_gtab_fpath
-        self.anchor_bank_full = pd.read_csv(self.active_gtab, sep='\t', comment='#', index_col=1).drop('Unnamed: 0',
-                                                                                                       axis=1)
+        self.anchor_bank_full = pd.read_csv(
+            self.active_gtab, sep='\t', comment='#', index_col=1
+        ).drop('Unnamed: 0', axis=1)
         self.anchor_bank_lo = self.anchor_bank_full.loc[:, 'max_ratio_lo']
         self.anchor_bank_hi = self.anchor_bank_full.loc[:, 'max_ratio_hi']
         self.anchor_bank = self.anchor_bank_full.loc[:, 'max_ratio']
         self.top_anchor = self.anchor_bank_full.index[0]
         self.top_anchor = self.anchor_bank_full.index[0]
-        self.ref_anchor = self.anchor_bank_full.index[self.anchor_bank_full.loc[:, 'max_ratio'] == 1.0][0]
+        self.ref_anchor = self.anchor_bank_full.index[
+            self.anchor_bank_full.loc[:, 'max_ratio'] == 1.0
+        ][0]
 
         # Set the options that are in a commented header in the GTAB file
         with open(self.active_gtab, "r") as f_in:
             t_gtab_config = ast.literal_eval(f_in.readline()[1:].strip())['GTAB']
-            t_pytrends_config = ast.literal_eval(f_in.readline()[1:].strip())['PYTRENDS']
-            self.set_options(pytrends_config=t_pytrends_config, gtab_config=t_gtab_config)
+            t_pytrends_config = ast.literal_eval(f_in.readline()[1:].strip())[
+                'PYTRENDS'
+            ]
+            self.set_options(
+                pytrends_config=t_pytrends_config, gtab_config=t_gtab_config
+            )
 
         print(f"Active anchorbank changed to: {os.path.basename(self.active_gtab)}\n")
 
     def create_anchorbank(self, verbose=False, keep_diagnostics=False):
-
         """
         Creates a gtab according to the config files found in the directory "./config/" and saves it.
         """
         self._error_flag = False
-        self._log_con = open(os.path.join(self.dir_path, "logs", f"log_{self._make_file_suffix()}.txt"),
-                             'a')  # append vs write
+        self._log_con = open(
+            os.path.join(self.dir_path, "logs", f"log_{self._make_file_suffix()}.txt"),
+            'a',
+        )  # append vs write
         self._log_con.write(f"\n{datetime.datetime.now()}\n")
 
         self._print_and_log(
-        "Start AnchorBank init for region {} in timeframe {}...".format(
-            self.CONFIG['PYTRENDS']['geo'], self.CONFIG['PYTRENDS']['timeframe']
-        ))
+            "Start AnchorBank init for region {} in timeframe {}...".format(
+                self.CONFIG['PYTRENDS']['geo'], self.CONFIG['PYTRENDS']['timeframe']
+            )
+        )
 
         if verbose:
             self._print_and_log(f"Full option parameters are: {self.CONFIG}")
 
-        fname_base = os.path.join(self.dir_path, "output", "google_anchorbanks",
-                                  f"google_anchorbank_{self._make_file_suffix()}.tsv")
+        fname_base = os.path.join(
+            self.dir_path,
+            "output",
+            "google_anchorbanks",
+            f"google_anchorbank_{self._make_file_suffix()}.tsv",
+        )
         if not os.path.exists(fname_base):
             google_results = self._get_google_results()
             if keep_diagnostics:
@@ -879,7 +1181,9 @@ class GTAB:
             #     gres.to_csv(f"test_data/{idx}.tsv", sep = '\t')
             #     idx+=1
 
-            self._print_and_log(f"Total queries (groups of 5 keywords): {len(google_results)}")
+            self._print_and_log(
+                f"Total queries (groups of 5 keywords): {len(google_results)}"
+            )
             time_series = pd.concat(google_results, axis=1)
             if keep_diagnostics:
                 self.time_series = time_series
@@ -896,8 +1200,12 @@ class GTAB:
             err = np.abs(1 - W0 * W0.transpose()).to_numpy().max()
             self._print_and_log(f"Err: {err}")
             if err > 1e-12:
-                warnings.warn("W0 doesn't seem to be multiplicatively symmetric: W0[i,j] != 1/W0[j,i].")
-                self._log_con.write("W0 doesn't seem to be multiplicatively symmetric: W0[i,j] != 1/W0[j,i].\n")
+                warnings.warn(
+                    "W0 doesn't seem to be multiplicatively symmetric: W0[i,j] != 1/W0[j,i]."
+                )
+                self._log_con.write(
+                    "W0 doesn't seem to be multiplicatively symmetric: W0[i,j] != 1/W0[j,i].\n"
+                )
             if np.isnan(err):
                 warnings.warn("Err is NaN.")
 
@@ -911,14 +1219,26 @@ class GTAB:
                 self.W, self.W_lo, self.W_hi = W, W_lo, W_hi
 
             top_anchor = opt_query_set[0]
-            ref_anchor = np.abs(W.loc[top_anchor, :] - np.median(W0.loc[top_anchor, :])).idxmin()
+            ref_anchor = np.abs(
+                W.loc[top_anchor, :] - np.median(W0.loc[top_anchor, :])
+            ).idxmin()
             # anchor_bank = W.loc[ref_anchor, :]
             # anchor_bank_hi = W_hi.loc[ref_anchor, :]
             # anchor_bank_lo = W_lo.loc[ref_anchor, :]
-            anchor_bank_full = pd.DataFrame({"max_ratio": W.loc[ref_anchor, :], "max_ratio_lo": W_lo.loc[ref_anchor, :],
-                                             "max_ratio_hi": W_hi.loc[ref_anchor, :]}).reset_index().rename(
-                {"index": "google_query"}, axis=1)
-            self._print_and_log(f"Total range: {anchor_bank_full.iloc[-1, 1] / anchor_bank_full.iloc[0, 1]}")
+            anchor_bank_full = (
+                pd.DataFrame(
+                    {
+                        "max_ratio": W.loc[ref_anchor, :],
+                        "max_ratio_lo": W_lo.loc[ref_anchor, :],
+                        "max_ratio_hi": W_hi.loc[ref_anchor, :],
+                    }
+                )
+                .reset_index()
+                .rename({"index": "google_query"}, axis=1)
+            )
+            self._print_and_log(
+                f"Total range: {anchor_bank_full.iloc[-1, 1] / anchor_bank_full.iloc[0, 1]}"
+            )
 
             self._print_and_log(f"Saving anchorbank as '{fname_base}'...")
 
@@ -935,12 +1255,15 @@ class GTAB:
         else:
             print(
                 "GTAB with such parameters already exists! Load it with 'set_active_gtab(filename)' or rename/delete it"
-                " to create another one with this name.")
+                " to create another one with this name."
+            )
 
         self._log_con.close()
 
-    def new_query(self, query, first_comparison=None, thresh=10, verbose=False, complete=False):
-        """ Request a new Google Trends query and calibrate it with the active gtab.  The 'PYTRENDS' key in
+    def new_query(
+        self, query, first_comparison=None, thresh=10, verbose=False, complete=False
+    ):
+        """Request a new Google Trends query and calibrate it with the active gtab.  The 'PYTRENDS' key in
         config_py.json is used. Make sure to set it according to your chosen anchorbank!
 
         :param query: string containing a single query.
@@ -958,13 +1281,21 @@ class GTAB:
         """
 
         if self.active_gtab is None:
-            raise ValueError("Must use 'set_active_gtab()' to select anchorbank before querying!")
-        self._log_con = open(os.path.join(self.dir_path, "logs", f"log_{self._make_file_suffix()}.txt"), 'a')
+            raise ValueError(
+                "Must use 'set_active_gtab()' to select anchorbank before querying!"
+            )
+        self._log_con = open(
+            os.path.join(self.dir_path, "logs", f"log_{self._make_file_suffix()}.txt"),
+            'a',
+        )
         self._log_con.write(f"\n{datetime.datetime.now()}\n")
         self._print_and_log(f"Using {self.active_gtab}")
         self._print_and_log(f"New query '{query}'")
-        mid = list(self.anchor_bank.index).index(self.ref_anchor) if first_comparison is None \
+        mid = (
+            list(self.anchor_bank.index).index(self.ref_anchor)
+            if first_comparison is None
             else list(self.anchor_bank.index).index(first_comparison)
+        )
         anchors = tuple(self.anchor_bank.index)
 
         # if query in anchors:
@@ -992,10 +1323,14 @@ class GTAB:
             except Exception as e:
                 if "response" in dir(e):
                     if e.response.status_code == 429:
-                        input("Quota reached! Please change IP and press enter to continue.")
+                        input(
+                            "Quota reached! Please change IP and press enter to continue."
+                        )
                         ts = self._query_google(keywords=[anchor, query]).iloc[:, 0:2]
                 else:
-                    self._print_and_log(f"Google query '{query}' failed because: {str(e)}")
+                    self._print_and_log(
+                        f"Google query '{query}' failed because: {str(e)}"
+                    )
                     break
 
             if anchor == query:
@@ -1007,10 +1342,18 @@ class GTAB:
 
             if max_query >= thresh and max_anchor >= thresh:
 
-                max_query_lo, max_query_hi, max_anchor_lo, max_anchor_hi = self._compute_hi_and_lo(max_query,
-                                                                                                   max_anchor)
-                ts_query_lo, ts_query_hi = map(list,
-                                               zip(*[self._compute_hi_and_lo(100, el)[2:] for el in ts.loc[:, query]]))
+                max_query_lo, max_query_hi, max_anchor_lo, max_anchor_hi = (
+                    self._compute_hi_and_lo(max_query, max_anchor)
+                )
+                ts_query_lo, ts_query_hi = map(
+                    list,
+                    zip(
+                        *[
+                            self._compute_hi_and_lo(100, el)[2:]
+                            for el in ts.loc[:, query]
+                        ]
+                    ),
+                )
 
                 if np.sum(ts.loc[:, query] == 100) == 1:
                     ts_query_lo[list(ts.loc[:, query]).index(100)] = 100
@@ -1037,32 +1380,41 @@ class GTAB:
                 self._log_con.close()
                 if self.from_cli:
                     if complete:
-                        return {"max_ratio": float(ratio),
-                                "max_ratio_hi": float(ratio_hi),
-                                "max_ratio_lo": float(ratio_lo),
-                                "ts_timestamp": [str(el) for el in timestamps],
-                                "ts_max_ratio": list(ts_query),
-                                "ts_max_ratio_hi": list(ts_query_hi),
-                                "ts_max_ratio_lo": list(ts_query_lo),
-                                "no_iters": n_iter
-                                }
+                        return {
+                            "max_ratio": float(ratio),
+                            "max_ratio_hi": float(ratio_hi),
+                            "max_ratio_lo": float(ratio_lo),
+                            "ts_timestamp": [str(el) for el in timestamps],
+                            "ts_max_ratio": list(ts_query),
+                            "ts_max_ratio_hi": list(ts_query_hi),
+                            "ts_max_ratio_lo": list(ts_query_lo),
+                            "no_iters": n_iter,
+                        }
                     else:
-                        return {"ts_timestamp": [str(el) for el in timestamps],
-                                "ts_max_ratio": list(ts_query),
-                                "ts_max_ratio_hi": list(ts_query_hi),
-                                "ts_max_ratio_lo": list(ts_query_lo)
-                                }
+                        return {
+                            "ts_timestamp": [str(el) for el in timestamps],
+                            "ts_max_ratio": list(ts_query),
+                            "ts_max_ratio_hi": list(ts_query_hi),
+                            "ts_max_ratio_lo": list(ts_query_lo),
+                        }
                 else:
                     ts_df = pd.DataFrame(
-                        {"max_ratio": list(ts_query), "max_ratio_hi": ts_query_hi, "max_ratio_lo": ts_query_lo},
-                        index=timestamps)
+                        {
+                            "max_ratio": list(ts_query),
+                            "max_ratio_hi": ts_query_hi,
+                            "max_ratio_lo": ts_query_lo,
+                        },
+                        index=timestamps,
+                    )
                     if complete:
-                        return {"max_ratio": float(ratio),
-                                "max_ratio_hi": float(ratio_hi),
-                                "max_ratio_lo": float(ratio_lo),
-                                "ts": ts_df,
-                                "no_iters": n_iter,
-                                "query": query}
+                        return {
+                            "max_ratio": float(ratio),
+                            "max_ratio_hi": float(ratio_hi),
+                            "max_ratio_lo": float(ratio_lo),
+                            "ts": ts_df,
+                            "no_iters": n_iter,
+                            "query": query,
+                        }
                     else:
                         return ts_df
 
@@ -1075,9 +1427,13 @@ class GTAB:
             n_iter += 1
 
         if hi <= 0:
-            self._print_and_log('Could not calibrate. Time series for query too high everywhere.')
+            self._print_and_log(
+                'Could not calibrate. Time series for query too high everywhere.'
+            )
         else:
-            self._print_and_log('Could not calibrate. Time series for query too low everywhere.')
+            self._print_and_log(
+                'Could not calibrate. Time series for query too low everywhere.'
+            )
         self._log_con.close()
 
         # Unable to be calibrated.
